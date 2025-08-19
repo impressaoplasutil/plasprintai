@@ -293,7 +293,7 @@ st.markdown(
 .version-tag { position: fixed; bottom: 50px; right: 25px; font-size: 12px; color: white; opacity: 0.7; z-index: 100; }
 .logo-footer { position: fixed; bottom: 5px; left: 50%; transform: translateX(-50%); width: 120px; z-index: 100; }
 </style>
-<div class="version-tag">V1.0</div>
+<div class="version-tag">U_V1.0</div>
 """,
     unsafe_allow_html=True,
 )
