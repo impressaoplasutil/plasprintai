@@ -144,23 +144,24 @@ except Exception as e:
     st.stop()
 
 # ===== Carregar DataFrames com cache =====
-@st.cache_data
+@st.cache_data(ttl=60)
 def read_ws(name):
     try:
         ws = sh.worksheet(name)
         values = ws.get_all_values()
         if not values:
             return pd.DataFrame()
-        # 🔹 padroniza número de colunas em todas as linhas
         max_len = max(len(r) for r in values)
         values = [r + [""] * (max_len - len(r)) for r in values]
-        # 🔹 usa a primeira linha como cabeçalho
         header = values[0]
-        # se o header for menor que max_len, completa com nomes genéricos
         if len(header) < max_len:
             header = header + [f"col_{i}" for i in range(len(header), max_len)]
         rows = values[1:]
-        return pd.DataFrame(rows, columns=header)
+        df = pd.DataFrame(rows, columns=header)
+        # remove linhas completamente vazias
+        is_empty_row = df.apply(lambda r: "".join(map(str, r)).strip() == "", axis=1)
+        df = df[~is_empty_row].reset_index(drop=True)
+        return df
     except:
         return pd.DataFrame()
 
@@ -175,21 +176,26 @@ st.sidebar.write("trabalhos:", len(trabalhos_df))
 st.sidebar.write("dacen:", len(dacen_df))
 st.sidebar.write("psi:", len(psi_df))
 
+# botão para atualizar cache
+def _refresh_cache():
+    st.cache_data.clear()
+    st.rerun()
+
+st.sidebar.button("🔄 Atualizar dados", use_container_width=True, on_click=_refresh_cache)
+
 # ===== Cliente Gemini =====
 os.environ["GEMINI_API_KEY"] = GEMINI_API_KEY
 client = genai.Client()
 
 # ===== Funções para busca =====
-# (sem filtro por palavra-chave — sempre envia até 200 linhas por aba)
-
 def search_relevant_rows(dfs, max_per_sheet=200):
     results = {}
     for name, df in dfs.items():
         if df.empty:
             continue
-        results[name] = df.head(max_per_sheet)
+        # 🔹 agora pega SEMPRE as últimas linhas em todas as abas
+        results[name] = df.tail(max_per_sheet).reset_index(drop=True)
     return results
-
 
 def build_context(dfs, max_chars=15000):
     parts = []
@@ -248,9 +254,8 @@ with col_meio:
                     st.error("Não foi possível obter a cotação do dólar.")
                 else:
                     dfs = {"erros": erros_df, "trabalhos": trabalhos_df, "dacen": dacen_df, "psi": psi_df}
-                    filtered_dfs = search_relevant_rows(dfs, max_per_sheet=200)  # 🔹 SEM FILTRO — sempre envia
+                    filtered_dfs = search_relevant_rows(dfs, max_per_sheet=200)
 
-                    # 🔎 Debug/visibilidade do que foi enviado
                     with st.sidebar.expander("Linhas enviadas ao Gemini", expanded=False):
                         for name, df_env in filtered_dfs.items():
                             st.write(f"{name}: {len(df_env)}")
