@@ -156,6 +156,7 @@ def read_ws(name):
         values = [r + [""] * (max_len - len(r)) for r in values]
         # 🔹 usa a primeira linha como cabeçalho
         header = values[0]
+        # se o header for menor que max_len, completa com nomes genéricos
         if len(header) < max_len:
             header = header + [f"col_{i}" for i in range(len(header), max_len)]
         rows = values[1:]
@@ -168,23 +169,19 @@ trabalhos_df = read_ws("trabalhos")
 dacen_df = read_ws("dacen")
 psi_df = read_ws("psi")
 
-# ===== Sidebar =====
 st.sidebar.header("Dados carregados")
 st.sidebar.write("erros:", len(erros_df))
 st.sidebar.write("trabalhos:", len(trabalhos_df))
 st.sidebar.write("dacen:", len(dacen_df))
 st.sidebar.write("psi:", len(psi_df))
 
-# 🔄 Botão para atualizar planilhas manualmente
-if st.sidebar.button("🔄 Atualizar planilhas"):
-    st.cache_data.clear()
-    st.rerun()
-
 # ===== Cliente Gemini =====
 os.environ["GEMINI_API_KEY"] = GEMINI_API_KEY
 client = genai.Client()
 
 # ===== Funções para busca =====
+# (sem filtro por palavra-chave — sempre envia até 200 linhas por aba)
+
 def search_relevant_rows(dfs, max_per_sheet=200):
     results = {}
     for name, df in dfs.items():
@@ -192,6 +189,7 @@ def search_relevant_rows(dfs, max_per_sheet=200):
             continue
         results[name] = df.head(max_per_sheet)
     return results
+
 
 def build_context(dfs, max_chars=15000):
     parts = []
@@ -250,8 +248,9 @@ with col_meio:
                     st.error("Não foi possível obter a cotação do dólar.")
                 else:
                     dfs = {"erros": erros_df, "trabalhos": trabalhos_df, "dacen": dacen_df, "psi": psi_df}
-                    filtered_dfs = search_relevant_rows(dfs, max_per_sheet=200)
+                    filtered_dfs = search_relevant_rows(dfs, max_per_sheet=200)  # 🔹 SEM FILTRO — sempre envia
 
+                    # 🔎 Debug/visibilidade do que foi enviado
                     with st.sidebar.expander("Linhas enviadas ao Gemini", expanded=False):
                         for name, df_env in filtered_dfs.items():
                             st.write(f"{name}: {len(df_env)}")
@@ -308,3 +307,5 @@ st.markdown(
     f'<img src="data:image/png;base64,{img_base64_logo}" class="logo-footer" />',
     unsafe_allow_html=True,
 )
+
+
