@@ -6,9 +6,6 @@ from google.oauth2.service_account import Credentials
 from google import genai
 import unicodedata  # 🔹 para remover acentos
 
-# ===== Configuração da página =====
-st.set_page_config(page_title="Plasprint Ai", layout="wide")
-
 # ===== Funções auxiliares =====
 def remove_accents(text):
     return ''.join(c for c in unicodedata.normalize('NFD', text)
@@ -58,11 +55,6 @@ dfs = {
     "dacen": read_ws("dacen"),
     "psi": read_ws("psi"),
 }
-
-# ===== Sidebar - Contadores =====
-st.sidebar.header("Dados carregados")
-for name, df in dfs.items():
-    st.sidebar.write(f"{name}: {len(df)} linhas")
 
 # ===== Botão para atualizar manualmente =====
 if st.sidebar.button("🔄 Atualizar dados", use_container_width=True):
