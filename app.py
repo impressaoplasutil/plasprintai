@@ -151,8 +151,10 @@ def read_ws(name):
         values = ws.get_all_values()
         if not values:
             return pd.DataFrame()
+        # 🔹 padroniza número de colunas em todas as linhas
         max_len = max(len(r) for r in values)
         values = [r + [""] * (max_len - len(r)) for r in values]
+        # 🔹 usa a primeira linha como cabeçalho
         header = values[0]
         if len(header) < max_len:
             header = header + [f"col_{i}" for i in range(len(header), max_len)]
@@ -210,6 +212,7 @@ def load_drive_image(file_id):
     return res.content
 
 def show_drive_images_from_text(text):
+    """Mostra imagens cujos links vieram no texto do Gemini"""
     drive_links = re.findall(r'https?://drive\.google\.com/file/d/([a-zA-Z0-9_-]+)[^/]*/view', text)
     for file_id in drive_links:
         try:
@@ -219,6 +222,7 @@ def show_drive_images_from_text(text):
             st.warning(f"Não foi possível carregar a imagem do Drive: {file_id}")
 
 def show_drive_images_from_sheets(dfs):
+    """Mostra imagens apenas das linhas filtradas relevantes"""
     for name, df in dfs.items():
         for col in df.columns:
             for val in df[col].dropna():
@@ -291,7 +295,7 @@ Responda de forma clara, sem citar a aba ou linha da planilha.
                                 unsafe_allow_html=True,
                             )
 
-                            # Mostrar imagens (texto + planilhas)
+                            # 🔹 Mostrar imagens apenas do texto e das linhas filtradas
                             show_drive_images_from_text(resp.text)
                             show_drive_images_from_sheets(filtered_dfs)
 
