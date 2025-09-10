@@ -168,12 +168,14 @@ erros_df = read_ws("erros")
 trabalhos_df = read_ws("trabalhos")
 dacen_df = read_ws("dacen")
 psi_df = read_ws("psi")
+gerais_df = read_ws("gerais")
 
 st.sidebar.header("Dados carregados")
 st.sidebar.write("erros:", len(erros_df))
 st.sidebar.write("trabalhos:", len(trabalhos_df))
 st.sidebar.write("dacen:", len(dacen_df))
 st.sidebar.write("psi:", len(psi_df))
+st.sidebar.write("gerais:", len(gerais_df))
 
 # ===== Cliente Gemini =====
 os.environ["GEMINI_API_KEY"] = GEMINI_API_KEY
@@ -247,7 +249,7 @@ with col_meio:
                 if rate is None:
                     st.error("Não foi possível obter a cotação do dólar.")
                 else:
-                    dfs = {"erros": erros_df, "trabalhos": trabalhos_df, "dacen": dacen_df, "psi": psi_df}
+                    dfs = {"erros": erros_df, "trabalhos": trabalhos_df, "dacen": dacen_df, "psi": psi_df, "gerais": gerais_df}
                     filtered_dfs = search_relevant_rows(dfs, max_per_sheet=200)  # 🔹 SEM FILTRO — sempre envia
 
                     # 🔎 Debug/visibilidade do que foi enviado
@@ -307,5 +309,3 @@ st.markdown(
     f'<img src="data:image/png;base64,{img_base64_logo}" class="logo-footer" />',
     unsafe_allow_html=True,
 )
-
-
