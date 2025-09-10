@@ -151,10 +151,8 @@ def read_ws(name):
         values = ws.get_all_values()
         if not values:
             return pd.DataFrame()
-        # 🔹 padroniza número de colunas em todas as linhas
         max_len = max(len(r) for r in values)
         values = [r + [""] * (max_len - len(r)) for r in values]
-        # 🔹 usa a primeira linha como cabeçalho
         header = values[0]
         if len(header) < max_len:
             header = header + [f"col_{i}" for i in range(len(header), max_len)]
@@ -180,14 +178,18 @@ st.sidebar.write("gerais:", len(gerais_df))
 os.environ["GEMINI_API_KEY"] = GEMINI_API_KEY
 client = genai.Client()
 
-# ===== Funções para busca =====
-def search_relevant_rows(dfs, max_per_sheet=200):
-    results = {}
+# ===== Funções para busca filtrando por pergunta =====
+def filter_rows_by_question(dfs, question):
+    question_lower = question.lower()
+    filtered = {}
     for name, df in dfs.items():
         if df.empty:
             continue
-        results[name] = df.head(max_per_sheet)
-    return results
+        mask = df.apply(lambda row: row.astype(str).str.lower().str.contains(question_lower).any(), axis=1)
+        filtered_rows = df[mask]
+        if not filtered_rows.empty:
+            filtered[name] = filtered_rows
+    return filtered
 
 def build_context(dfs, max_chars=15000):
     parts = []
@@ -203,7 +205,7 @@ def build_context(dfs, max_chars=15000):
         context = context[:max_chars] + "\n...[CONTEXTO TRUNCADO]"
     return context
 
-# ===== Funções de imagens do Drive =====
+# ===== Cache de imagens do Drive =====
 @st.cache_data
 def load_drive_image(file_id):
     url = f"https://drive.google.com/uc?export=view&id={file_id}"
@@ -212,7 +214,7 @@ def load_drive_image(file_id):
     return res.content
 
 def show_drive_images_from_text(text):
-    """Mostra imagens cujos links vieram no texto do Gemini"""
+    # 🔹 Puxa apenas imagens da resposta
     drive_links = re.findall(r'https?://drive\.google\.com/file/d/([a-zA-Z0-9_-]+)[^/]*/view', text)
     for file_id in drive_links:
         try:
@@ -220,20 +222,6 @@ def show_drive_images_from_text(text):
             st.image(img_bytes, use_container_width=True)
         except:
             st.warning(f"Não foi possível carregar a imagem do Drive: {file_id}")
-
-def show_drive_images_from_sheets(dfs):
-    """Mostra imagens apenas das linhas filtradas relevantes"""
-    for name, df in dfs.items():
-        for col in df.columns:
-            for val in df[col].dropna():
-                if isinstance(val, str) and "drive.google.com" in val:
-                    file_id = re.findall(r"/d/([a-zA-Z0-9_-]+)", val)
-                    if file_id:
-                        try:
-                            img_bytes = io.BytesIO(load_drive_image(file_id[0]))
-                            st.image(img_bytes, use_container_width=True, caption=f"{name} → {col}")
-                        except:
-                            st.warning(f"Não consegui abrir a imagem do Drive na aba {name}.")
 
 def remove_drive_links(text):
     return re.sub(r'https?://drive\.google\.com/file/d/[a-zA-Z0-9_-]+/view\?usp=drive_link', '', text)
@@ -261,7 +249,7 @@ with col_meio:
                     st.error("Não foi possível obter a cotação do dólar.")
                 else:
                     dfs = {"erros": erros_df, "trabalhos": trabalhos_df, "dacen": dacen_df, "psi": psi_df, "gerais": gerais_df}
-                    filtered_dfs = search_relevant_rows(dfs, max_per_sheet=200)
+                    filtered_dfs = filter_rows_by_question(dfs, pergunta)
 
                     with st.sidebar.expander("Linhas enviadas ao Gemini", expanded=False):
                         for name, df_env in filtered_dfs.items():
@@ -289,16 +277,11 @@ Responda de forma clara, sem citar a aba ou linha da planilha.
                             resp = client.models.generate_content(model="gemini-2.5-flash", contents=prompt)
                             output_fmt = format_dollar_values(resp.text, rate)
                             output_fmt = remove_drive_links(output_fmt)
-
                             st.markdown(
                                 f"<div style='text-align:center; margin-top:20px;'>{output_fmt.replace(chr(10),'<br/>')}</div>",
                                 unsafe_allow_html=True,
                             )
-
-                            # 🔹 Mostrar imagens apenas do texto e das linhas filtradas
                             show_drive_images_from_text(resp.text)
-                            show_drive_images_from_sheets(filtered_dfs)
-
                         except Exception as e:
                             st.error(f"Erro ao chamar Gemini: {e}")
             st.session_state.botao_texto = "Buscar"
