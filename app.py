@@ -178,18 +178,26 @@ st.sidebar.write("gerais:", len(gerais_df))
 os.environ["GEMINI_API_KEY"] = GEMINI_API_KEY
 client = genai.Client()
 
-# ===== Funções para busca filtrando por pergunta =====
-def filter_rows_by_question(dfs, question):
-    question_lower = question.lower()
-    filtered = {}
+# ===== Normalização de texto =====
+def normalize_text(text):
+    text = str(text).lower()
+    text = unicodedata.normalize('NFD', text)
+    text = "".join(c for c in text if unicodedata.category(c) != 'Mn')
+    return text
+
+# ===== Funções para busca =====
+def search_relevant_rows(dfs, query, max_per_sheet=200):
+    results = {}
+    query_norm = normalize_text(query)
     for name, df in dfs.items():
         if df.empty:
             continue
-        mask = df.apply(lambda row: row.astype(str).str.lower().str.contains(question_lower).any(), axis=1)
-        filtered_rows = df[mask]
-        if not filtered_rows.empty:
-            filtered[name] = filtered_rows
-    return filtered
+        df_copy = df.copy()
+        df_copy["normalized"] = df_copy.apply(lambda row: " ".join([normalize_text(v) for v in row]), axis=1)
+        matched = df_copy[df_copy["normalized"].str.contains(query_norm, na=False)]
+        if not matched.empty:
+            results[name] = matched.head(max_per_sheet)
+    return results
 
 def build_context(dfs, max_chars=15000):
     parts = []
@@ -198,7 +206,7 @@ def build_context(dfs, max_chars=15000):
             continue
         parts.append(f"--- {name} ---")
         for r in df.to_dict(orient="records"):
-            row_items = [f"{k}: {v}" for k, v in r.items() if str(v).strip() not in ["", "None", "nan"]]
+            row_items = [f"{k}: {v}" for k, v in r.items() if str(v).strip() not in ["", "None", "nan"] and k != "normalized"]
             parts.append(" | ".join(row_items))
     context = "\n".join(parts)
     if len(context) > max_chars:
@@ -213,15 +221,18 @@ def load_drive_image(file_id):
     res.raise_for_status()
     return res.content
 
-def show_drive_images_from_text(text):
-    # 🔹 Puxa apenas imagens da resposta
-    drive_links = re.findall(r'https?://drive\.google\.com/file/d/([a-zA-Z0-9_-]+)[^/]*/view', text)
-    for file_id in drive_links:
-        try:
-            img_bytes = io.BytesIO(load_drive_image(file_id))
-            st.image(img_bytes, use_container_width=True)
-        except:
-            st.warning(f"Não foi possível carregar a imagem do Drive: {file_id}")
+def show_drive_images_from_dfs(dfs):
+    for df in dfs.values():
+        for row in df.to_dict(orient="records"):
+            for v in row.values():
+                if isinstance(v, str):
+                    drive_links = re.findall(r'https?://drive\.google\.com/file/d/([a-zA-Z0-9_-]+)[^/]*/view', v)
+                    for file_id in drive_links:
+                        try:
+                            img_bytes = io.BytesIO(load_drive_image(file_id))
+                            st.image(img_bytes, use_container_width=True)
+                        except:
+                            st.warning(f"Não foi possível carregar a imagem do Drive: {file_id}")
 
 def remove_drive_links(text):
     return re.sub(r'https?://drive\.google\.com/file/d/[a-zA-Z0-9_-]+/view\?usp=drive_link', '', text)
@@ -249,7 +260,7 @@ with col_meio:
                     st.error("Não foi possível obter a cotação do dólar.")
                 else:
                     dfs = {"erros": erros_df, "trabalhos": trabalhos_df, "dacen": dacen_df, "psi": psi_df, "gerais": gerais_df}
-                    filtered_dfs = filter_rows_by_question(dfs, pergunta)
+                    filtered_dfs = search_relevant_rows(dfs, pergunta, max_per_sheet=200)
 
                     with st.sidebar.expander("Linhas enviadas ao Gemini", expanded=False):
                         for name, df_env in filtered_dfs.items():
@@ -281,7 +292,7 @@ Responda de forma clara, sem citar a aba ou linha da planilha.
                                 f"<div style='text-align:center; margin-top:20px;'>{output_fmt.replace(chr(10),'<br/>')}</div>",
                                 unsafe_allow_html=True,
                             )
-                            show_drive_images_from_text(resp.text)
+                            show_drive_images_from_dfs(filtered_dfs)
                         except Exception as e:
                             st.error(f"Erro ao chamar Gemini: {e}")
             st.session_state.botao_texto = "Buscar"
