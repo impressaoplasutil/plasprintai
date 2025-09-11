@@ -188,14 +188,22 @@ def normalize_text(text):
 # ===== Funções para busca =====
 def search_relevant_rows(dfs, query, max_per_sheet=200):
     results = {}
-    query_words = [normalize_text(w) for w in query.split()]
+    query_norm = normalize_text(query)
     for name, df in dfs.items():
         if df.empty:
             continue
+
+        def normalize_row(row):
+            parts = []
+            for v in row:
+                v_str = str(v)
+                if not v_str.startswith("http"):  # não normaliza links
+                    parts.append(normalize_text(v_str))
+            return " ".join(parts)
+
         df_copy = df.copy()
-        df_copy["normalized"] = df_copy.apply(lambda row: " ".join([normalize_text(v) for v in row]), axis=1)
-        mask = df_copy["normalized"].apply(lambda text: all(w in text for w in query_words))
-        matched = df_copy[mask]
+        df_copy["normalized"] = df_copy.apply(normalize_row, axis=1)
+        matched = df_copy[df_copy["normalized"].str.contains(query_norm, na=False)]
         if not matched.empty:
             results[name] = matched.head(max_per_sheet)
     return results
@@ -227,9 +235,10 @@ def show_drive_images_from_dfs(dfs):
         for row in df.to_dict(orient="records"):
             for v in row.values():
                 if isinstance(v, str):
-                    match = re.search(r'https?://drive\.google\.com/file/d/([a-zA-Z0-9_-]+)', v)
-                    if match:
-                        file_id = match.group(1)
+                    drive_links = re.findall(
+                        r'https?://drive\.google\.com/file/d/([a-zA-Z0-9_-]+)/view', v
+                    )
+                    for file_id in drive_links:
                         try:
                             img_bytes = io.BytesIO(load_drive_image(file_id))
                             st.image(img_bytes, use_container_width=True)
