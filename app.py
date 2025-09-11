@@ -188,13 +188,14 @@ def normalize_text(text):
 # ===== Funções para busca =====
 def search_relevant_rows(dfs, query, max_per_sheet=200):
     results = {}
-    query_norm = normalize_text(query)
+    query_words = [normalize_text(w) for w in query.split()]
     for name, df in dfs.items():
         if df.empty:
             continue
         df_copy = df.copy()
         df_copy["normalized"] = df_copy.apply(lambda row: " ".join([normalize_text(v) for v in row]), axis=1)
-        matched = df_copy[df_copy["normalized"].str.contains(query_norm, na=False)]
+        mask = df_copy["normalized"].apply(lambda text: all(w in text for w in query_words))
+        matched = df_copy[mask]
         if not matched.empty:
             results[name] = matched.head(max_per_sheet)
     return results
@@ -226,8 +227,9 @@ def show_drive_images_from_dfs(dfs):
         for row in df.to_dict(orient="records"):
             for v in row.values():
                 if isinstance(v, str):
-                    drive_links = re.findall(r'https?://drive\.google\.com/file/d/([a-zA-Z0-9_-]+)[^/]*/view', v)
-                    for file_id in drive_links:
+                    match = re.search(r'https?://drive\.google\.com/file/d/([a-zA-Z0-9_-]+)', v)
+                    if match:
+                        file_id = match.group(1)
                         try:
                             img_bytes = io.BytesIO(load_drive_image(file_id))
                             st.image(img_bytes, use_container_width=True)
@@ -318,4 +320,3 @@ st.markdown(
     f'<img src="data:image/png;base64,{img_base64_logo}" class="logo-footer" />',
     unsafe_allow_html=True,
 )
-
