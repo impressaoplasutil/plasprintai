@@ -1,10 +1,9 @@
 import streamlit as st
 import pandas as pd
-import json, base64, os, re, requests, io
+import json, base64, os, re, requests, io, unicodedata, difflib
 import gspread
 from google.oauth2.service_account import Credentials
 from google import genai
-import unicodedata  # 🔹 para remover acentos
 
 # ===== Configuração da página =====
 st.set_page_config(page_title="PlasPrint IA", page_icon="favicon.ico", layout="wide")
@@ -22,7 +21,6 @@ def get_usd_brl_rate():
 def format_dollar_values(text, rate):
     if "$" not in text or rate is None:
         return text
-
     money_regex = re.compile(r'\$\d+(?:[.,]\d{3})*(?:[.,]\d+)?')
 
     def parse_money_str(s):
@@ -185,29 +183,27 @@ def normalize_text(text):
     text = "".join(c for c in text if unicodedata.category(c) != 'Mn')
     return text
 
-# ===== Funções para busca =====
+# ===== Busca aproximada por similaridade =====
 def search_relevant_rows(dfs, query, max_per_sheet=200):
     results = {}
     query_norm = normalize_text(query)
     for name, df in dfs.items():
         if df.empty:
             continue
-
-        def normalize_row(row):
-            parts = []
-            for v in row:
-                v_str = str(v)
-                if not v_str.startswith("http"):  # não normaliza links
-                    parts.append(normalize_text(v_str))
-            return " ".join(parts)
-
         df_copy = df.copy()
-        df_copy["normalized"] = df_copy.apply(normalize_row, axis=1)
-        matched = df_copy[df_copy["normalized"].str.contains(query_norm, na=False)]
+        df_copy["normalized"] = df_copy.apply(
+            lambda row: " ".join(normalize_text(str(v)) for v in row if not str(v).startswith("http")),
+            axis=1
+        )
+        df_copy["similarity"] = df_copy["normalized"].apply(
+            lambda t: difflib.SequenceMatcher(None, t, query_norm).ratio()
+        )
+        matched = df_copy[df_copy["similarity"] > 0.2]
         if not matched.empty:
-            results[name] = matched.head(max_per_sheet)
+            results[name] = matched.sort_values("similarity", ascending=False).head(max_per_sheet)
     return results
 
+# ===== Montar contexto =====
 def build_context(dfs, max_chars=15000):
     parts = []
     for name, df in dfs.items():
@@ -215,7 +211,7 @@ def build_context(dfs, max_chars=15000):
             continue
         parts.append(f"--- {name} ---")
         for r in df.to_dict(orient="records"):
-            row_items = [f"{k}: {v}" for k, v in r.items() if str(v).strip() not in ["", "None", "nan"] and k != "normalized"]
+            row_items = [f"{k}: {v}" for k, v in r.items() if str(v).strip() not in ["", "None", "nan"] and k not in ["normalized","similarity"]]
             parts.append(" | ".join(row_items))
     context = "\n".join(parts)
     if len(context) > max_chars:
@@ -283,7 +279,7 @@ with col_meio:
                         context = build_context(filtered_dfs)
                         prompt = f"""
 Você é um assistente técnico que responde em português.
-Baseie-se **apenas** nos dados abaixo (planilhas). 
+Baseie-se **apenas** nos dados abaixo (planilhas).
 Responda de forma objetiva, sem citar de onde veio a informação ou a fonte.
 Se houver links de imagens, inclua-os no final.
 
@@ -315,7 +311,7 @@ st.markdown(
 .version-tag { position: fixed; bottom: 50px; right: 25px; font-size: 12px; color: white; opacity: 0.7; z-index: 100; }
 .logo-footer { position: fixed; bottom: 5px; left: 50%; transform: translateX(-50%); width: 120px; z-index: 100; }
 </style>
-<div class="version-tag">U_V1.0</div>
+<div class="version-tag">U_V1.1</div>
 """,
     unsafe_allow_html=True,
 )
