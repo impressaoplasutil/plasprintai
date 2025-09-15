@@ -260,7 +260,7 @@ with col_meio:
 
     buscar = st.button(st.session_state.botao_texto, use_container_width=True)
 
-    if buscar:
+ if buscar:
     if not pergunta.strip():
         st.warning("Digite uma pergunta.")
     else:
@@ -356,4 +356,5 @@ st.markdown(
     f'<img src="data:image/png;base64,{img_base64_logo}" class="logo-footer" />',
     unsafe_allow_html=True,
 )
+
 
