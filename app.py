@@ -22,7 +22,6 @@ def get_usd_brl_rate():
 def format_dollar_values(text, rate):
     if "$" not in text or rate is None:
         return text
-
     money_regex = re.compile(r'\$\d+(?:[.,]\d{3})*(?:[.,]\d+)?')
 
     def parse_money_str(s):
@@ -178,25 +177,30 @@ st.sidebar.write("gerais:", len(gerais_df))
 os.environ["GEMINI_API_KEY"] = GEMINI_API_KEY
 client = genai.Client()
 
-# ===== Funções de busca semântica e exibição de imagem =====
+# ===== Busca palavra a palavra (fuzzy) =====
 def similar(a, b):
     return SequenceMatcher(None, a.lower(), b.lower()).ratio()
 
 def buscar_resposta(pergunta, dfs, limiar=0.6):
-    pergunta_norm = pergunta.lower()
-    melhor_score = 0
+    palavras_pergunta = pergunta.lower().split()
     melhor_row = None
+    melhor_score = 0
+    melhor_imagem = None
 
     for df in dfs.values():
         for _, row in df.iterrows():
             texto = " ".join([str(val) for val in row.values if isinstance(val, str)]).lower()
-            score = similar(pergunta_norm, texto)
-            if score > melhor_score:
-                melhor_score = score
-                melhor_row = row
+            palavras_linha = texto.split()
+            for p in palavras_pergunta:
+                for w in palavras_linha:
+                    score = similar(p, w)
+                    if score > melhor_score:
+                        melhor_score = score
+                        melhor_row = row
 
     if melhor_score < limiar:
         return None, None
+
     resposta = melhor_row.get("Resposta") or melhor_row.get("Coluna de resposta") or ""
     imagem = melhor_row.get("Imagem") or melhor_row.get("Coluna de imagem") or ""
     return resposta, imagem
@@ -247,7 +251,6 @@ with col_meio:
                     if not resposta_texto:
                         st.warning(f'Não encontrei nada relacionado a "{pergunta}" nas planilhas.')
                     else:
-                        # Exibir resposta e imagem
                         st.subheader("Resposta encontrada")
                         st.markdown(resposta_texto)
                         exibir_imagem(imagem)
