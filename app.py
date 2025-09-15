@@ -1,77 +1,119 @@
 import streamlit as st
 import pandas as pd
-import json, base64, os, re, requests, io, time, unicodedata
+import json, base64, os, re, requests, io
 import gspread
 from google.oauth2.service_account import Credentials
 from google import genai
-from difflib import SequenceMatcher
+import yfinance as yf
+import datetime
+import time
 
 # ===== Configuração da página =====
 st.set_page_config(page_title="PlasPrint IA", page_icon="favicon.ico", layout="wide")
 
 # ===== Funções auxiliares =====
-@st.cache_data(ttl=300)
 def get_usd_brl_rate():
+    """
+    Retorna a cotação USD/BRL.
+    Usa cache local em st.session_state para evitar excesso de requisições.
+    Primeiro tenta AwesomeAPI com retry, depois Yahoo Finance.
+    """
+    # Verifica cache
+    if "usd_brl_cache" in st.session_state:
+        cached = st.session_state.usd_brl_cache
+        if (datetime.datetime.now() - cached["timestamp"]).seconds < 600:
+            return cached["rate"]
+
+    rate = None
+
+    # --- Tentativa 1: AwesomeAPI com retry ---
+    url = "https://economia.awesomeapi.com.br/json/last/USD-BRL"
+    max_retries = 3
+    for attempt in range(max_retries):
+        try:
+            res = requests.get(url, timeout=10)
+            if res.status_code == 429:
+                # Too Many Requests -> espera exponencial
+                time.sleep(2 ** attempt)
+                continue
+            data = res.json()
+            if "USDBRL" in data and "ask" in data["USDBRL"]:
+                rate = float(data["USDBRL"]["ask"])
+                break
+        except:
+            # Não exibe aviso na tela
+            pass
+
+    # --- Tentativa 2: Yahoo Finance ---
+    if rate is None:
+        try:
+            ticker = yf.Ticker("USDBRL=X")
+            hist = ticker.history(period="1d")
+            if not hist.empty:
+                rate = float(hist["Close"].iloc[-1])
+        except:
+            pass
+
+    # --- Salva no cache ---
+    st.session_state.usd_brl_cache = {
+        "rate": rate,
+        "timestamp": datetime.datetime.now()
+    }
+
+    return rate
+
+def parse_money_str(s):
+    s = s.strip()
+    if s.startswith('$'):
+        s = s[1:]
+    s = s.replace(" ", "").replace(",", ".")
     try:
-        res = requests.get("https://economia.awesomeapi.com.br/json/last/USD-BRL")
-        data = res.json()
-        return float(data["USDBRL"]["ask"])
+        return float(s)
     except:
         return None
 
+def to_brazilian(n):
+    if 0 < n < 0.01:
+        n = 0.01
+    return f"{n:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
+
 def format_dollar_values(text, rate):
-    if "$" not in text or rate is None:
-        return text
-    money_regex = re.compile(r'\$\d+(?:[.,]\d{3})*(?:[.,]\d+)?')
-
-    def parse_money_str(s):
-        s = s.strip()
-        if s.startswith('$'):
-            s = s[1:]
-        s = s.replace(" ", "")
-        if '.' in s and ',' in s:
-            if s.rfind(',') > s.rfind('.'):
-                dec, thou = ',', '.'
-            else:
-                dec, thou = '.', ','
-            s_clean = s.replace(thou, '').replace(dec, '.')
-        elif ',' in s:
-            last = s.rsplit(',', 1)[-1]
-            if 1 <= len(last) <= 2:
-                s_clean = s.replace('.', '').replace(',', '.')
-            else:
-                s_clean = s.replace(',', '')
-        else:
-            s_clean = s.replace('.', '')
-        try:
-            return float(s_clean)
-        except:
-            return None
-
-    def to_brazilian(n):
-        s = f"{n:,.2f}"
-        s = s.replace(",", "X").replace(".", ",").replace("X", ".")
-        return s
+    money_regex = re.compile(r'\$\s?\d+(?:[.,]\d+)?')
+    found = False
 
     def repl(m):
+        nonlocal found
+        found = True
         orig = m.group(0)
         val = parse_money_str(orig)
-        if val is None:
+        if val is None or rate is None:
             return orig
-        converted = val * rate
+        converted = val * float(rate)
         brl = to_brazilian(converted)
         return f"{orig} (R$ {brl})"
 
     formatted = money_regex.sub(repl, text)
-    if not formatted.endswith("\n"):
-        formatted += "\n"
-    formatted += "(valores sem impostos)"
+
+    if found:
+        if not formatted.endswith("\n"):
+            formatted += "\n"
+        formatted += "(valores sem impostos)"
+
     return formatted
 
+def process_response(texto):
+    padrao_dolar = r"\$\s?\d+(?:[.,]\d+)?"
+    if re.search(padrao_dolar, texto):
+        rate = get_usd_brl_rate()
+        if rate:
+            return format_dollar_values(texto, rate)
+        else:
+            return texto  # Não mostra erro na tela
+    return texto
+
 def inject_favicon():
-    favicon_path = "favicon.ico"
     try:
-        with open(favicon_path, "rb") as f:
+        with open("favicon.ico", "rb") as f:
             data = base64.b64encode(f.read()).decode()
         st.markdown(f'<link rel="icon" href="data:image/x-icon;base64,{data}" type="image/x-icon" />', unsafe_allow_html=True)
     except:
@@ -123,7 +165,7 @@ div.stTextInput > div > input {{
 </style>
 """, unsafe_allow_html=True)
 
-# ===== Carregar segredos =====
+# ===== Segredos =====
 try:
     GEMINI_API_KEY = st.secrets["GEMINI_API_KEY"]
     SHEET_ID = st.secrets["SHEET_ID"]
@@ -136,86 +178,82 @@ sa_json = json.loads(base64.b64decode(SERVICE_ACCOUNT_B64).decode())
 scopes = ["https://www.googleapis.com/auth/spreadsheets", "https://www.googleapis.com/auth/drive"]
 creds = Credentials.from_service_account_info(sa_json, scopes=scopes)
 gc = gspread.authorize(creds)
+
 try:
     sh = gc.open_by_key(SHEET_ID)
 except Exception as e:
     st.error(f"Não consegui abrir a planilha: {e}")
     st.stop()
 
-# ===== Carregar DataFrames com cache =====
+# ===== Função para ler abas =====
 @st.cache_data
 def read_ws(name):
     try:
         ws = sh.worksheet(name)
-        values = ws.get_all_values()
-        if not values:
-            return pd.DataFrame()
-        max_len = max(len(r) for r in values)
-        values = [r + [""] * (max_len - len(r)) for r in values]
-        header = values[0]
-        if len(header) < max_len:
-            header = header + [f"col_{i}" for i in range(len(header), max_len)]
-        rows = values[1:]
-        return pd.DataFrame(rows, columns=header)
-    except:
+        return pd.DataFrame(ws.get_all_records())
+    except Exception as e:
+        st.warning(f"Aba '{name}' não pôde ser carregada: {e}")
         return pd.DataFrame()
 
-erros_df = read_ws("erros")
-trabalhos_df = read_ws("trabalhos")
-dacen_df = read_ws("dacen")
-psi_df = read_ws("psi")
-gerais_df = read_ws("gerais")
+def refresh_data():
+    st.session_state.erros_df = read_ws("erros")
+    st.session_state.trabalhos_df = read_ws("trabalhos")
+    st.session_state.dacen_df = read_ws("dacen")
+    st.session_state.psi_df = read_ws("psi")
+    st.session_state.gerais_df = read_ws("gerais")
 
+if "erros_df" not in st.session_state:
+    refresh_data()
+
+# ===== Sidebar =====
 st.sidebar.header("Dados carregados")
-st.sidebar.write("erros:", len(erros_df))
-st.sidebar.write("trabalhos:", len(trabalhos_df))
-st.sidebar.write("dacen:", len(dacen_df))
-st.sidebar.write("psi:", len(psi_df))
-st.sidebar.write("gerais:", len(gerais_df))
+st.sidebar.write("erros:", len(st.session_state.erros_df))
+st.sidebar.write("trabalhos:", len(st.session_state.trabalhos_df))
+st.sidebar.write("dacen:", len(st.session_state.dacen_df))
+st.sidebar.write("psi:", len(st.session_state.psi_df))
+st.sidebar.write("gerais:", len(st.session_state.gerais_df))
+
+if st.sidebar.button("Atualizar planilha"):
+    refresh_data()
+    st.rerun()
 
 # ===== Cliente Gemini =====
 os.environ["GEMINI_API_KEY"] = GEMINI_API_KEY
 client = genai.Client()
 
-# ===== Busca fuzzy palavra a palavra =====
-def buscar_resposta_fuzzy(pergunta, dfs, limiar=0.5):
-    palavras_pergunta = pergunta.lower().split()
-    melhor_row = None
-    melhor_score = 0
-    melhor_texto = ""
-    melhor_imagem = ""
+def build_context(dfs, max_chars=15000):
+    parts = []
+    for name, df in dfs.items():
+        if df.empty:
+            continue
+        parts.append(f"--- {name} ---")
+        for r in df.head(50).to_dict(orient="records"):
+            row_items = [f"{k}: {v}" for k,v in r.items() if v is not None and str(v).strip() != '']
+            parts.append(" | ".join(row_items))
+    context = "\n".join(parts)
+    if len(context) > max_chars:
+        context = context[:max_chars] + "\n...[CONTEXTO TRUNCADO]"
+    return context
 
-    for df in dfs.values():
-        for _, row in df.iterrows():
-            texto = " ".join([str(val) for val in row.values if val and isinstance(val, str)]).lower()
-            palavras_linha = texto.split()
-            score_total = 0
-            for p in palavras_pergunta:
-                max_sim = max([SequenceMatcher(None, p, w).ratio() for w in palavras_linha] or [0])
-                score_total += max_sim
-            score_total /= len(palavras_pergunta)
-            if score_total > melhor_score:
-                melhor_score = score_total
-                melhor_row = row
-                melhor_texto = texto
-                imgs = re.findall(r'(https?://drive\.google\.com/file/d/[^/\s]+/view)', texto)
-                melhor_imagem = imgs[0] if imgs else ""
+# ===== Cache de imagens do Drive =====
+@st.cache_data
+def load_drive_image(file_id):
+    url = f"https://drive.google.com/uc?export=view&id={file_id}"
+    res = requests.get(url)
+    res.raise_for_status()
+    return res.content
 
-    if melhor_score < limiar:
-        return None, None
+def show_drive_images_from_text(text):
+    drive_links = re.findall(r'https?://drive\.google\.com/file/d/([a-zA-Z0-9_-]+)[^/]*/view', text)
+    for file_id in drive_links:
+        try:
+            img_bytes = io.BytesIO(load_drive_image(file_id))
+            st.image(img_bytes, use_container_width=True)
+        except:
+            st.warning(f"Não foi possível carregar imagem do Drive: {file_id}")
 
-    return melhor_texto, melhor_imagem
-
-def exibir_imagem(imagem):
-    if not imagem:
-        return
-    match = re.search(r'/d/([^/]+)', imagem)
-    if match:
-        file_id = match.group(1)
-        url = f"https://drive.google.com/uc?export=view&id={file_id}"
-        st.image(url, use_container_width=True)
-    else:
-        st.image(imagem, use_container_width=True)
+def remove_drive_links(text):
+    return re.sub(r'https?://drive\.google\.com/file/d/[a-zA-Z0-9_-]+/view\?usp=drive_link', '', text)
 
 # ===== Layout principal =====
 col_esq, col_meio, col_dir = st.columns([1,2,1])
@@ -236,19 +274,49 @@ with col_meio:
             st.session_state.botao_texto = "Aguarde"
             with st.spinner("Processando resposta..."):
                 dfs = {
-                    "erros": erros_df,
-                    "trabalhos": trabalhos_df,
-                    "dacen": dacen_df,
-                    "psi": psi_df,
-                    "gerais": gerais_df
+                    "erros": st.session_state.erros_df,
+                    "trabalhos": st.session_state.trabalhos_df,
+                    "dacen": st.session_state.dacen_df,
+                    "psi": st.session_state.psi_df,
+                    "gerais": st.session_state.gerais_df
                 }
-                resposta_texto, imagem = buscar_resposta_fuzzy(pergunta, dfs, limiar=0.5)
+                context = build_context(dfs)
+                prompt = f"""
+Você é um assistente técnico que responde em português.
+Baseie-se **apenas** nos dados abaixo (planilhas). 
+Responda de forma objetiva, sem citar de onde veio a informação ou a fonte.
+Se houver links de imagens, inclua-os no final.
 
-                if not resposta_texto:
-                    st.warning(f'Não encontrei nada relacionado a "{pergunta}" nas planilhas.')
-                else:
-                    st.subheader("Resposta encontrada")
-                    st.markdown(resposta_texto)
-                    exibir_imagem(imagem)
+Dados:
+{context}
 
-            st.session_state.botao_texto = "Buscar"
+Pergunta:
+{pergunta}
+
+Responda de forma clara, sem citar a aba ou linha da planilha.
+"""
+                try:
+                    resp = client.models.generate_content(model="gemini-2.5-flash", contents=prompt)
+                    output_fmt = process_response(resp.text)
+                    output_fmt = remove_drive_links(output_fmt)
+                    st.markdown(f"<div style='text-align:center; margin-top:20px;'>{output_fmt.replace(chr(10),'<br/>')}</div>", unsafe_allow_html=True)
+                    show_drive_images_from_text(resp.text)
+                except Exception as e:
+                    st.error(f"Erro ao chamar Gemini: {e}")
+        st.session_state.botao_texto = "Buscar"
+
+# ===== Rodapé e logo =====
+st.markdown("""
+<style>
+.version-tag { position: fixed; bottom: 50px; right: 25px; font-size: 12px; color: white; opacity: 0.7; z-index: 100; }
+.logo-footer { position: fixed; bottom: 5px; left: 50%; transform: translateX(-50%); width: 120px; z-index: 100; }
+</style>
+<div class="version-tag">V1.0</div>
+""", unsafe_allow_html=True)
+
+def get_base64_img(path):
+    with open(path, "rb") as f:
+        return base64.b64encode(f.read()).decode()
+
+img_base64_logo = get_base64_img("logo.png")
+st.markdown(f'<img src="data:image/png;base64,{img_base64_logo}" class="logo-footer" />', unsafe_allow_html=True)
