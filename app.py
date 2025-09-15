@@ -178,68 +178,46 @@ st.sidebar.write("gerais:", len(gerais_df))
 os.environ["GEMINI_API_KEY"] = GEMINI_API_KEY
 client = genai.Client()
 
-# ===== Busca inteligente =====
+# ===== Funções de busca semântica e imagem =====
 def similar(a, b):
-    return SequenceMatcher(None, a, b).ratio()
+    return SequenceMatcher(None, a.lower(), b.lower()).ratio()
 
-def search_relevant_rows(dfs, query, max_per_sheet=200, limiar=0.75):
-    palavras = query.lower().split()
-    results = {}
-    for name, df in dfs.items():
-        def contem_palavra(row):
-            texto = " ".join(map(str, row.values)).lower()
-            for p in palavras:
-                for palavra_linha in texto.split():
-                    if similar(p, palavra_linha) >= limiar:
-                        return True
-            return False
-        mask = df.apply(contem_palavra, axis=1)
-        filtrado = df[mask]
-        if not filtrado.empty:
-            results[name] = filtrado.head(max_per_sheet)
-    return results
+def buscar_resposta(pergunta, dfs, limiar=0.6):
+    pergunta_norm = pergunta.lower()
+    melhor_score = 0
+    melhor_row = None
+    melhor_aba = None
 
-def build_context(dfs, max_chars=15000):
-    parts = []
-    for name, df in dfs.items():
-        if df.empty:
-            continue
-        parts.append(f"--- {name} ---")
-        for r in df.to_dict(orient="records"):
-            row_items = [f"{k}: {v}" for k, v in r.items() if str(v).strip() not in ["", "None", "nan"]]
-            parts.append(" | ".join(row_items))
-    context = "\n".join(parts)
-    if len(context) > max_chars:
-        context = context[:max_chars] + "\n...[CONTEXTO TRUNCADO]"
-    return context
+    for aba, df in dfs.items():
+        for idx, row in df.iterrows():
+            # Concatenar todas as colunas de texto
+            texto = " ".join([str(val) for val in row.values if isinstance(val, str)]).lower()
+            score = similar(pergunta_norm, texto)
+            if score > melhor_score:
+                melhor_score = score
+                melhor_row = row
+                melhor_aba = aba
 
-@st.cache_data
-def load_drive_image(file_id):
-    url = f"https://drive.google.com/uc?export=view&id={file_id}"
-    res = requests.get(url)
-    res.raise_for_status()
-    return res.content
+    if melhor_score < limiar:
+        return None, None
+    resposta = melhor_row.get("Resposta") or melhor_row.get("Coluna de resposta") or ""
+    imagem = melhor_row.get("Imagem") or melhor_row.get("Coluna de imagem") or ""
+    return resposta, imagem
 
-def show_drive_images_from_dfs(dfs):
-    for df in dfs.values():
-        for row in df.to_dict(orient="records"):
-            for v in row.values():
-                if isinstance(v, str):
-                    drive_links = re.findall(
-                        r'https?://drive\.google\.com/file/d/([a-zA-Z0-9_-]+)/view', v
-                    )
-                    for file_id in drive_links:
-                        try:
-                            img_bytes = io.BytesIO(load_drive_image(file_id))
-                            st.image(img_bytes, use_container_width=True)
-                        except:
-                            st.warning(f"Não foi possível carregar a imagem do Drive: {file_id}")
-
-def remove_drive_links(text):
-    return re.sub(r'https?://drive\.google\.com/file/d/[a-zA-Z0-9_-]+/view\?usp=drive_link', '', text)
+def exibir_imagem(imagem):
+    if not imagem:
+        return
+    if "drive.google.com" in imagem:
+        match = re.search(r'/d/([^/]+)', imagem)
+        if match:
+            file_id = match.group(1)
+            url = f"https://drive.google.com/uc?export=view&id={file_id}"
+            st.image(url, use_container_width=True)
+    else:
+        st.image(imagem, use_container_width=True)
 
 # ===== Layout principal =====
-col_esq, col_meio, col_dir = st.columns([1, 2, 1])
+col_esq, col_meio, col_dir = st.columns([1,2,1])
 with col_meio:
     st.markdown("<h1 class='custom-font'>PlasPrint IA</h1><br>", unsafe_allow_html=True)
     st.markdown("<p class='custom-font'>Qual a sua dúvida?</p>", unsafe_allow_html=True)
@@ -267,82 +245,9 @@ with col_meio:
                         "psi": psi_df,
                         "gerais": gerais_df
                     }
-                    filtered_dfs = search_relevant_rows(dfs, pergunta, max_per_sheet=200)
+                    resposta_texto, imagem = buscar_resposta(pergunta, dfs, limiar=0.6)
 
-                    with st.sidebar.expander("Linhas enviadas ao Gemini", expanded=False):
-                        for name, df_env in filtered_dfs.items():
-                            st.write(f"{name}: {len(df_env)}")
-
-                    if not filtered_dfs:
+                    if not resposta_texto:
                         st.warning(f'Não encontrei nada relacionado a "{pergunta}" nas planilhas.')
                     else:
-                        context = build_context(filtered_dfs)
-
-                        prompt = f"""
-Você é um assistente técnico que responde em português.
-Baseie-se **apenas** nos dados abaixo (planilhas). 
-Responda de forma objetiva, sem citar de onde veio a informação ou a fonte.
-Se houver links de imagens, inclua-os no final.
-
-Dados:
-{context}
-
-Pergunta:
-{pergunta}
-
-Responda de forma clara, sem citar a aba ou linha da planilha.
-"""
-
-                        def gerar_resposta_gemini(prompt, tentativas=3, intervalo=5):
-                            for tentativa in range(tentativas):
-                                try:
-                                    response = client.models.generate_content(
-                                        model="gemini-2.5-flash",
-                                        contents=prompt
-                                    )
-                                    return response.text
-                                except Exception as e:
-                                    if "503" in str(e) and tentativa < tentativas - 1:
-                                        time.sleep(intervalo)
-                                    else:
-                                        raise e
-
-                        try:
-                            with st.spinner("O sistema pode estar sobrecarregado, tentando gerar resposta..."):
-                                resposta_texto = gerar_resposta_gemini(prompt)
-
-                            output_fmt = format_dollar_values(resposta_texto, rate)
-                            output_fmt = remove_drive_links(output_fmt)
-
-                            st.markdown(
-                                f"<div style='text-align:center; margin-top:20px;'>{output_fmt.replace(chr(10),'<br/>')}</div>",
-                                unsafe_allow_html=True,
-                            )
-
-                            show_drive_images_from_dfs(filtered_dfs)
-
-                        except Exception as e:
-                            st.error(f"Ocorreu um erro ao tentar obter a resposta do Gemini: {e}")
-            st.session_state.botao_texto = "Buscar"
-
-# ===== Rodapé e logo =====
-st.markdown(
-    """
-<style>
-.version-tag { position: fixed; bottom: 50px; right: 25px; font-size: 12px; color: white; opacity: 0.7; z-index: 100; }
-.logo-footer { position: fixed; bottom: 5px; left: 50%; transform: translateX(-50%); width: 120px; z-index: 100; }
-</style>
-<div class="version-tag">U_V1.0</div>
-""",
-    unsafe_allow_html=True,
-)
-
-def get_base64_img(path):
-    with open(path, "rb") as f:
-        return base64.b64encode(f.read()).decode()
-
-img_base64_logo = get_base64_img("logo.png")
-st.markdown(
-    f'<img src="data:image/png;base64,{img_base64_logo}" class="logo-footer" />',
-    unsafe_allow_html=True,
-)
+                        # Mont
