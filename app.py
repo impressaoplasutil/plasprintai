@@ -177,31 +177,36 @@ st.sidebar.write("gerais:", len(gerais_df))
 os.environ["GEMINI_API_KEY"] = GEMINI_API_KEY
 client = genai.Client()
 
-# ===== Busca palavra a palavra (fuzzy) =====
-def similar(a, b):
-    return SequenceMatcher(None, a.lower(), b.lower()).ratio()
-
-def buscar_resposta(pergunta, dfs, limiar=0.6):
+# ===== Busca fuzzy palavra a palavra =====
+def buscar_resposta_fuzzy(pergunta, dfs, limiar=0.6):
     palavras_pergunta = pergunta.lower().split()
     melhor_row = None
     melhor_score = 0
-    melhor_imagem = None
 
     for df in dfs.values():
         for _, row in df.iterrows():
             texto = " ".join([str(val) for val in row.values if isinstance(val, str)]).lower()
             palavras_linha = texto.split()
+
+            score_total = 0
             for p in palavras_pergunta:
+                max_sim = 0
                 for w in palavras_linha:
-                    score = similar(p, w)
-                    if score > melhor_score:
-                        melhor_score = score
-                        melhor_row = row
+                    s = SequenceMatcher(None, p, w).ratio()
+                    if s > max_sim:
+                        max_sim = s
+                score_total += max_sim
+
+            score_total /= len(palavras_pergunta)
+
+            if score_total > melhor_score:
+                melhor_score = score_total
+                melhor_row = row
 
     if melhor_score < limiar:
         return None, None
 
-    resposta = melhor_row.get("Resposta") or melhor_row.get("Coluna de resposta") or ""
+    resposta = melhor_row.get("Resposta") or melhor_row.get("Coluna de resposta") or "Resposta não encontrada"
     imagem = melhor_row.get("Imagem") or melhor_row.get("Coluna de imagem") or ""
     return resposta, imagem
 
@@ -235,24 +240,20 @@ with col_meio:
         else:
             st.session_state.botao_texto = "Aguarde"
             with st.spinner("Processando resposta..."):
-                rate = get_usd_brl_rate()
-                if rate is None:
-                    st.error("Não foi possível obter a cotação do dólar.")
-                else:
-                    dfs = {
-                        "erros": erros_df,
-                        "trabalhos": trabalhos_df,
-                        "dacen": dacen_df,
-                        "psi": psi_df,
-                        "gerais": gerais_df
-                    }
-                    resposta_texto, imagem = buscar_resposta(pergunta, dfs, limiar=0.6)
+                dfs = {
+                    "erros": erros_df,
+                    "trabalhos": trabalhos_df,
+                    "dacen": dacen_df,
+                    "psi": psi_df,
+                    "gerais": gerais_df
+                }
+                resposta_texto, imagem = buscar_resposta_fuzzy(pergunta, dfs, limiar=0.6)
 
-                    if not resposta_texto:
-                        st.warning(f'Não encontrei nada relacionado a "{pergunta}" nas planilhas.')
-                    else:
-                        st.subheader("Resposta encontrada")
-                        st.markdown(resposta_texto)
-                        exibir_imagem(imagem)
+                if not resposta_texto:
+                    st.warning(f'Não encontrei nada relacionado a "{pergunta}" nas planilhas.')
+                else:
+                    st.subheader("Resposta encontrada")
+                    st.markdown(resposta_texto)
+                    exibir_imagem(imagem)
 
             st.session_state.botao_texto = "Buscar"
