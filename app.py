@@ -305,7 +305,7 @@ st.markdown("""
 .version-tag { position: fixed; bottom: 50px; right: 25px; font-size: 12px; color: white; opacity: 0.7; z-index: 100; }
 .logo-footer { position: fixed; bottom: 5px; left: 50%; transform: translateX(-50%); width: 120px; z-index: 100; }
 </style>
-<div class="version-tag">V1.0</div>
+<div class="version-tag">U V1.0</div>
 """, unsafe_allow_html=True)
 
 def get_base64_img(path):
@@ -314,3 +314,4 @@ def get_base64_img(path):
 
 img_base64_logo = get_base64_img("logo.png")
 st.markdown(f'<img src="data:image/png;base64,{img_base64_logo}" class="logo-footer" />', unsafe_allow_html=True)
+
