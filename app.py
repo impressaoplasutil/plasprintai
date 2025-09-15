@@ -18,22 +18,18 @@ def get_usd_brl_rate():
     Usa cache local em st.session_state para evitar excesso de requisições.
     Primeiro tenta AwesomeAPI com retry, depois Yahoo Finance.
     """
-    # Verifica cache
     if "usd_brl_cache" in st.session_state:
         cached = st.session_state.usd_brl_cache
         if (datetime.datetime.now() - cached["timestamp"]).seconds < 600:
             return cached["rate"]
 
     rate = None
-
-    # --- Tentativa 1: AwesomeAPI com retry ---
     url = "https://economia.awesomeapi.com.br/json/last/USD-BRL"
     max_retries = 3
     for attempt in range(max_retries):
         try:
             res = requests.get(url, timeout=10)
             if res.status_code == 429:
-                # Too Many Requests -> espera exponencial
                 time.sleep(2 ** attempt)
                 continue
             data = res.json()
@@ -41,10 +37,8 @@ def get_usd_brl_rate():
                 rate = float(data["USDBRL"]["ask"])
                 break
         except:
-            # Não exibe aviso na tela
             pass
 
-    # --- Tentativa 2: Yahoo Finance ---
     if rate is None:
         try:
             ticker = yf.Ticker("USDBRL=X")
@@ -54,7 +48,6 @@ def get_usd_brl_rate():
         except:
             pass
 
-    # --- Salva no cache ---
     st.session_state.usd_brl_cache = {
         "rate": rate,
         "timestamp": datetime.datetime.now()
@@ -108,7 +101,7 @@ def process_response(texto):
         if rate:
             return format_dollar_values(texto, rate)
         else:
-            return texto  # Não mostra erro na tela
+            return texto
     return texto
 
 def inject_favicon():
@@ -118,6 +111,7 @@ def inject_favicon():
         st.markdown(f'<link rel="icon" href="data:image/x-icon;base64,{data}" type="image/x-icon" />', unsafe_allow_html=True)
     except:
         pass
+
 inject_favicon()
 
 def get_base64_of_jpg(image_path):
