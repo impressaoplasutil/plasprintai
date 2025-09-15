@@ -1,10 +1,10 @@
 import streamlit as st
 import pandas as pd
-import json, base64, os, re, requests, io, time
+import json, base64, os, re, requests, io, time, unicodedata
 import gspread
 from google.oauth2.service_account import Credentials
 from google import genai
-import unicodedata  # 🔹 para remover acentos
+from difflib import SequenceMatcher
 
 # ===== Configuração da página =====
 st.set_page_config(page_title="PlasPrint IA", page_icon="favicon.ico", layout="wide")
@@ -77,7 +77,6 @@ def inject_favicon():
         st.markdown(f'<link rel="icon" href="data:image/x-icon;base64,{data}" type="image/x-icon" />', unsafe_allow_html=True)
     except:
         pass
-
 inject_favicon()
 
 def get_base64_of_jpg(image_path):
@@ -179,34 +178,25 @@ st.sidebar.write("gerais:", len(gerais_df))
 os.environ["GEMINI_API_KEY"] = GEMINI_API_KEY
 client = genai.Client()
 
-# ===== Normalização de texto =====
-def normalize_text(text):
-    text = str(text).lower()
-    text = unicodedata.normalize('NFD', text)
-    text = "".join(c for c in text if unicodedata.category(c) != 'Mn')
-    return text
+# ===== Busca inteligente =====
+def similar(a, b):
+    return SequenceMatcher(None, a, b).ratio()
 
-# ===== Funções para busca =====
-def search_relevant_rows(dfs, query, max_per_sheet=200):
+def search_relevant_rows(dfs, query, max_per_sheet=200, limiar=0.75):
+    palavras = query.lower().split()
     results = {}
-    query_norm = normalize_text(query)
     for name, df in dfs.items():
-        if df.empty:
-            continue
-
-        def normalize_row(row):
-            parts = []
-            for v in row:
-                v_str = str(v)
-                if not v_str.startswith("http"):  # não normaliza links
-                    parts.append(normalize_text(v_str))
-            return " ".join(parts)
-
-        df_copy = df.copy()
-        df_copy["normalized"] = df_copy.apply(normalize_row, axis=1)
-        matched = df_copy[df_copy["normalized"].str.contains(query_norm, na=False)]
-        if not matched.empty:
-            results[name] = matched.head(max_per_sheet)
+        def contem_palavra(row):
+            texto = " ".join(map(str, row.values)).lower()
+            for p in palavras:
+                for palavra_linha in texto.split():
+                    if similar(p, palavra_linha) >= limiar:
+                        return True
+            return False
+        mask = df.apply(contem_palavra, axis=1)
+        filtrado = df[mask]
+        if not filtrado.empty:
+            results[name] = filtrado.head(max_per_sheet)
     return results
 
 def build_context(dfs, max_chars=15000):
@@ -216,14 +206,13 @@ def build_context(dfs, max_chars=15000):
             continue
         parts.append(f"--- {name} ---")
         for r in df.to_dict(orient="records"):
-            row_items = [f"{k}: {v}" for k, v in r.items() if str(v).strip() not in ["", "None", "nan"] and k != "normalized"]
+            row_items = [f"{k}: {v}" for k, v in r.items() if str(v).strip() not in ["", "None", "nan"]]
             parts.append(" | ".join(row_items))
     context = "\n".join(parts)
     if len(context) > max_chars:
         context = context[:max_chars] + "\n...[CONTEXTO TRUNCADO]"
     return context
 
-# ===== Cache de imagens do Drive =====
 @st.cache_data
 def load_drive_image(file_id):
     url = f"https://drive.google.com/uc?export=view&id={file_id}"
