@@ -178,7 +178,7 @@ st.sidebar.write("gerais:", len(gerais_df))
 os.environ["GEMINI_API_KEY"] = GEMINI_API_KEY
 client = genai.Client()
 
-# ===== Funções de busca semântica e imagem =====
+# ===== Funções de busca semântica e exibição de imagem =====
 def similar(a, b):
     return SequenceMatcher(None, a.lower(), b.lower()).ratio()
 
@@ -186,17 +186,14 @@ def buscar_resposta(pergunta, dfs, limiar=0.6):
     pergunta_norm = pergunta.lower()
     melhor_score = 0
     melhor_row = None
-    melhor_aba = None
 
-    for aba, df in dfs.items():
-        for idx, row in df.iterrows():
-            # Concatenar todas as colunas de texto
+    for df in dfs.values():
+        for _, row in df.iterrows():
             texto = " ".join([str(val) for val in row.values if isinstance(val, str)]).lower()
             score = similar(pergunta_norm, texto)
             if score > melhor_score:
                 melhor_score = score
                 melhor_row = row
-                melhor_aba = aba
 
     if melhor_score < limiar:
         return None, None
@@ -250,4 +247,9 @@ with col_meio:
                     if not resposta_texto:
                         st.warning(f'Não encontrei nada relacionado a "{pergunta}" nas planilhas.')
                     else:
-                        # Mont
+                        # Exibir resposta e imagem
+                        st.subheader("Resposta encontrada")
+                        st.markdown(resposta_texto)
+                        exibir_imagem(imagem)
+
+            st.session_state.botao_texto = "Buscar"
