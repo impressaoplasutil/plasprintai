@@ -261,27 +261,34 @@ with col_meio:
     buscar = st.button(st.session_state.botao_texto, use_container_width=True)
 
     if buscar:
-        if not pergunta.strip():
-            st.warning("Digite uma pergunta.")
-        else:
-            st.session_state.botao_texto = "Aguarde"
-            with st.spinner("Processando resposta..."):
-                rate = get_usd_brl_rate()
-                if rate is None:
-                    st.error("Não foi possível obter a cotação do dólar.")
+    if not pergunta.strip():
+        st.warning("Digite uma pergunta.")
+    else:
+        st.session_state.botao_texto = "Aguarde"
+        with st.spinner("Processando resposta..."):
+            rate = get_usd_brl_rate()
+            if rate is None:
+                st.error("Não foi possível obter a cotação do dólar.")
+            else:
+                dfs = {
+                    "erros": erros_df,
+                    "trabalhos": trabalhos_df,
+                    "dacen": dacen_df,
+                    "psi": psi_df,
+                    "gerais": gerais_df
+                }
+                filtered_dfs = search_relevant_rows(dfs, pergunta, max_per_sheet=200)
+
+                with st.sidebar.expander("Linhas enviadas ao Gemini", expanded=False):
+                    for name, df_env in filtered_dfs.items():
+                        st.write(f"{name}: {len(df_env)}")
+
+                if not filtered_dfs:
+                    st.warning(f'Não encontrei nada relacionado a "{pergunta}" nas planilhas.')
                 else:
-                    dfs = {"erros": erros_df, "trabalhos": trabalhos_df, "dacen": dacen_df, "psi": psi_df, "gerais": gerais_df}
-                    filtered_dfs = search_relevant_rows(dfs, pergunta, max_per_sheet=200)
+                    context = build_context(filtered_dfs)
 
-                    with st.sidebar.expander("Linhas enviadas ao Gemini", expanded=False):
-                        for name, df_env in filtered_dfs.items():
-                            st.write(f"{name}: {len(df_env)}")
-
-                    if not filtered_dfs:
-                        st.warning(f'Não encontrei nada relacionado a "{pergunta}" nas planilhas.')
-                    else:
-                        context = build_context(filtered_dfs)
-                        prompt = f"""
+                    prompt = f"""
 Você é um assistente técnico que responde em português.
 Baseie-se **apenas** nos dados abaixo (planilhas). 
 Responda de forma objetiva, sem citar de onde veio a informação ou a fonte.
@@ -295,18 +302,38 @@ Pergunta:
 
 Responda de forma clara, sem citar a aba ou linha da planilha.
 """
-                        try:
-                            resp = client.models.generate_content(model="gemini-2.5-flash", contents=prompt)
-                            output_fmt = format_dollar_values(resp.text, rate)
-                            output_fmt = remove_drive_links(output_fmt)
-                            st.markdown(
-                                f"<div style='text-align:center; margin-top:20px;'>{output_fmt.replace(chr(10),'<br/>')}</div>",
-                                unsafe_allow_html=True,
-                            )
-                            show_drive_images_from_dfs(filtered_dfs)
-                        except Exception as e:
-                            st.error(f"Erro ao chamar Gemini: {e}")
-            st.session_state.botao_texto = "Buscar"
+
+                    def gerar_resposta_gemini(prompt, tentativas=3, intervalo=5):
+                        for tentativa in range(tentativas):
+                            try:
+                                response = client.models.generate_content(
+                                    model="gemini-2.5-flash",
+                                    contents=prompt
+                                )
+                                return response.text
+                            except Exception as e:
+                                if "503" in str(e) and tentativa < tentativas - 1:
+                                    time.sleep(intervalo)
+                                else:
+                                    raise e
+
+                    try:
+                        with st.spinner("O sistema pode estar sobrecarregado, tentando gerar resposta..."):
+                            resposta_texto = gerar_resposta_gemini(prompt)
+
+                        output_fmt = format_dollar_values(resposta_texto, rate)
+                        output_fmt = remove_drive_links(output_fmt)
+
+                        st.markdown(
+                            f"<div style='text-align:center; margin-top:20px;'>{output_fmt.replace(chr(10),'<br/>')}</div>",
+                            unsafe_allow_html=True,
+                        )
+
+                        show_drive_images_from_dfs(filtered_dfs)
+
+                    except Exception as e:
+                        st.error(f"Ocorreu um erro ao tentar obter a resposta do Gemini: {e}")
+        st.session_state.botao_texto = "Buscar"
 
 # ===== Rodapé e logo =====
 st.markdown(
@@ -329,3 +356,4 @@ st.markdown(
     f'<img src="data:image/png;base64,{img_base64_logo}" class="logo-footer" />',
     unsafe_allow_html=True,
 )
+
